@@ -5,7 +5,8 @@ Tiny, tested wrapper over `systemd-inhibit` for running long jobs (overnight bui
 ## What it does
 
 - Holds a logind `sleep` inhibitor (`systemd-inhibit --what=sleep`) so anything that calls `systemctl suspend` becomes a no-op while the inhibitor is held.
-- Uses `os.execvp` so the Python process is replaced by `systemd-inhibit`: no orphan parent, Ctrl-C releases the inhibitor cleanly, crashes release it automatically (inhibitor lifetime = process lifetime).
+- Supervises `systemd-inhibit` as a child process so it can render a live countdown on stderr (duration mode, TTY only) and print a summary line when the inhibitor is released (`timer elapsed`, `interrupted`, `command exited rc=N`, etc.) — the feedback you want when the tool is running overnight.
+- Three-layer leak defense (`PR_SET_PDEATHSIG`, own process group, `try/finally` cleanup) so the inhibitor is released even if Python is SIGKILL'd or crashes — the inhibitor's lifetime still tracks the visible process lifetime.
 - Does **not** touch screen lock, DPMS, or idle timers — if you use `xidlehook` or the desktop's idle-lock, the screen may still lock after its normal idle period. CPU/disk work keeps running regardless.
 
 ## Requirements
@@ -30,10 +31,42 @@ stay-awake 30m                 # hold inhibitor for 30 minutes
 stay-awake 5400s               # hold inhibitor for 5400 seconds
 stay-awake -- make train       # run the command under the inhibitor; release on exit
 stay-awake --list              # show active systemd inhibitors (wraps `systemd-inhibit --list`)
+stay-awake --quiet 8h          # suppress countdown and summary; still supervise
 stay-awake --help
 ```
 
 Duration grammar is `<N>h`, `<N>m`, or `<N>s` — one positive integer followed by one unit. No mixed units (`1h30m`), no floats. Use seconds for fine control.
+
+## Console output
+
+Duration mode prints to stderr (stdout stays clean for pipelines):
+
+```
+stay-awake: holding sleep inhibitor until 05:30 (8h 0m)
+7h 42m remaining (until 05:30)        # live countdown, TTY only
+stay-awake: released after 8h 0m (timer elapsed, target was 05:30)
+```
+
+Countdown cadence is adaptive — once per minute when >1h remaining, once per 10s between 1m–1h, once per second under 1m — so overnight runs don't spam the terminal. When stderr isn't a TTY, only the start and end lines are printed.
+
+Command mode gets start and end lines only (no countdown — the wrapped command's output would collide with `\r` rewrites):
+
+```
+stay-awake: holding sleep inhibitor for: make train
+... child stdout/stderr pass through untouched ...
+stay-awake: released after 47m 12s (command exited rc=0)
+```
+
+Exit codes:
+
+| Case                                    | Exit code         |
+|-----------------------------------------|-------------------|
+| Duration elapsed normally               | `0`               |
+| Command mode                            | wrapped command's rc |
+| `Ctrl-C` / `KeyboardInterrupt`          | `130`             |
+| `systemd-inhibit` not on `PATH`         | `127`             |
+| Invalid duration / unknown flag         | `2`               |
+| `systemd-inhibit` itself died abnormally | its rc            |
 
 ## Examples
 
