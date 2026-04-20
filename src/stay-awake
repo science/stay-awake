@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+"""stay-awake entry — holds a systemd sleep inhibitor for a duration or command."""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from cli import main
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
